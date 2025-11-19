@@ -1,8 +1,12 @@
 import os
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+from typing import List, Optional
+from database import create_document, get_documents, db
+from schemas import CoffeeProduct, Article, Order, OrderItem
 
-app = FastAPI()
+app = FastAPI(title="Urban Bean Coffee Roasters API")
 
 app.add_middleware(
     CORSMiddleware,
@@ -14,15 +18,52 @@ app.add_middleware(
 
 @app.get("/")
 def read_root():
-    return {"message": "Hello from FastAPI Backend!"}
+    return {"message": "Urban Bean Coffee Roasters API running"}
 
-@app.get("/api/hello")
-def hello():
-    return {"message": "Hello from the backend API!"}
+# Catalog endpoints
+@app.get("/api/products", response_model=List[CoffeeProduct])
+def list_products(category: Optional[str] = None):
+    filt = {"in_stock": True}
+    if category:
+        filt["categories"] = {"$in": [category]}
+    docs = get_documents("coffeeproduct", filt)
+    # Map Mongo docs to schema-safe dicts
+    return [CoffeeProduct(**{k: v for k, v in d.items() if k != "_id"}) for d in docs]
+
+@app.post("/api/products", response_model=str)
+def create_product(product: CoffeeProduct):
+    try:
+        inserted_id = create_document("coffeeproduct", product)
+        return inserted_id
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# Articles
+@app.get("/api/articles", response_model=List[Article])
+def list_articles(category: Optional[str] = None):
+    filt = {}
+    if category:
+        filt["category"] = category
+    docs = get_documents("article", filt)
+    return [Article(**{k: v for k, v in d.items() if k != "_id"}) for d in docs]
+
+@app.post("/api/articles", response_model=str)
+def create_article(article: Article):
+    try:
+        return create_document("article", article)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# Orders (simplified checkout capture)
+@app.post("/api/orders", response_model=str)
+def create_order(order: Order):
+    try:
+        return create_document("order", order)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/test")
 def test_database():
-    """Test endpoint to check if database is available and accessible"""
     response = {
         "backend": "✅ Running",
         "database": "❌ Not Available",
@@ -31,39 +72,22 @@ def test_database():
         "connection_status": "Not Connected",
         "collections": []
     }
-    
     try:
-        # Try to import database module
-        from database import db
-        
         if db is not None:
             response["database"] = "✅ Available"
-            response["database_url"] = "✅ Configured"
+            response["database_url"] = "✅ Set" if os.getenv("DATABASE_URL") else "❌ Not Set"
             response["database_name"] = db.name if hasattr(db, 'name') else "✅ Connected"
             response["connection_status"] = "Connected"
-            
-            # Try to list collections to verify connectivity
             try:
-                collections = db.list_collection_names()
-                response["collections"] = collections[:10]  # Show first 10 collections
+                response["collections"] = db.list_collection_names()[:10]
                 response["database"] = "✅ Connected & Working"
             except Exception as e:
-                response["database"] = f"⚠️  Connected but Error: {str(e)[:50]}"
+                response["database"] = f"⚠️ Connected but Error: {str(e)[:50]}"
         else:
-            response["database"] = "⚠️  Available but not initialized"
-            
-    except ImportError:
-        response["database"] = "❌ Database module not found (run enable-database first)"
+            response["database"] = "⚠️ Available but not initialized"
     except Exception as e:
         response["database"] = f"❌ Error: {str(e)[:50]}"
-    
-    # Check environment variables
-    import os
-    response["database_url"] = "✅ Set" if os.getenv("DATABASE_URL") else "❌ Not Set"
-    response["database_name"] = "✅ Set" if os.getenv("DATABASE_NAME") else "❌ Not Set"
-    
     return response
-
 
 if __name__ == "__main__":
     import uvicorn
